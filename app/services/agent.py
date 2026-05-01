@@ -1,9 +1,12 @@
-"""LangChain agent setup, system prompt builder, streaming wrapper."""
-from typing import AsyncIterator
+"""AgentService — singleton LangGraph agent with typed context and prompt cache."""
+from __future__ import annotations
+
 import json
+from typing import AsyncIterator
 
 from langchain.agents import create_agent
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain.agents.middleware.types import dynamic_prompt, ModelRequest
+from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -11,8 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import AsyncSessionLocal
 from app.models import GameSummary, DecisionDNA
-from app.services.agent_tools import list_past_games, get_game_details
+from app.services.agent_tools import AgentContext, list_past_games, get_game_details
 
 BASE_SYSTEM = """You are the user's per-game chess coach inside their game-analysis sidebar.
 
@@ -61,13 +65,14 @@ def _format_dna(dna: DecisionDNA | None) -> str:
 
 
 async def build_system_prompt(db: AsyncSession, user_id: str) -> str:
+    """Build the full personalised system prompt for a user. Used by tests and middleware."""
     sum_rows = await db.execute(
         select(GameSummary)
         .where(GameSummary.user_id == user_id)
         .order_by(GameSummary.created_at.desc())
         .limit(5)
     )
-    summaries = list(reversed(sum_rows.scalars().all()))  # oldest -> newest
+    summaries = list(reversed(sum_rows.scalars().all()))
 
     dna_rows = await db.execute(
         select(DecisionDNA)
@@ -86,81 +91,94 @@ async def build_system_prompt(db: AsyncSession, user_id: str) -> str:
     )
 
 
-# --- Agent singleton ---
-
-_checkpointer: AsyncPostgresSaver | MemorySaver | None = None
-_agent = None
-_pg_cm = None  # async context manager handle for AsyncPostgresSaver.from_conn_string
-
-
-async def init_agent(database_url: str, *, in_memory: bool = False) -> None:
-    global _checkpointer, _agent, _pg_cm
-    if in_memory:
-        _checkpointer = MemorySaver()
-    else:
-        # AsyncPostgresSaver expects a sync libpq URL (psycopg). Strip async driver.
-        pg_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
-        _pg_cm = AsyncPostgresSaver.from_conn_string(pg_url)
-        _checkpointer = await _pg_cm.__aenter__()
-        await _checkpointer.setup()
-
-    _agent = create_agent(
-        model=ChatOpenAI(
-            model=settings.model_smart,
-            api_key=settings.openai_api_key,
-            temperature=0.6,
-        ),
-        tools=[list_past_games, get_game_details],
-        checkpointer=_checkpointer,
-    )
+async def _build_prompt_for_user(user_id: str) -> str:
+    """Open a fresh DB session and build the prompt. Used by the middleware closure."""
+    async with AsyncSessionLocal() as db:
+        return await build_system_prompt(db, user_id)
 
 
-async def shutdown_agent() -> None:
-    global _pg_cm
-    if _pg_cm is not None:
-        await _pg_cm.__aexit__(None, None, None)
-        _pg_cm = None
+class AgentService:
+    def __init__(self) -> None:
+        self._agent = None
+        self._checkpointer: AsyncPostgresSaver | MemorySaver | None = None
+        self._pg_cm = None
+        self._prompt_cache: dict[str, str] = {}
+
+    async def init(self, database_url: str, *, in_memory: bool = False) -> None:
+        if in_memory:
+            self._checkpointer = MemorySaver()
+        else:
+            pg_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
+            self._pg_cm = AsyncPostgresSaver.from_conn_string(pg_url)
+            self._checkpointer = await self._pg_cm.__aenter__()
+            await self._checkpointer.setup()
+
+        @dynamic_prompt
+        async def _personalized_prompt(request: ModelRequest[AgentContext]) -> str:
+            thread_id = (
+                request.runtime.execution_info.thread_id
+                if request.runtime and request.runtime.execution_info
+                else None
+            )
+            if thread_id and thread_id in self._prompt_cache:
+                return self._prompt_cache[thread_id]
+            user_id = request.runtime.context.user_id
+            prompt = await _build_prompt_for_user(user_id)
+            if thread_id:
+                self._prompt_cache[thread_id] = prompt
+            return prompt
+
+        self._agent = create_agent(
+            model=ChatOpenAI(
+                model=settings.model_smart,
+                api_key=settings.openai_api_key,
+                temperature=0.6,
+            ),
+            tools=[list_past_games, get_game_details],
+            checkpointer=self._checkpointer,
+            context_schema=AgentContext,
+            middleware=[_personalized_prompt],
+        )
+
+    async def shutdown(self) -> None:
+        if self._pg_cm is not None:
+            await self._pg_cm.__aexit__(None, None, None)
+            self._pg_cm = None
+
+    async def stream(
+        self,
+        thread_id: str,
+        context: AgentContext,
+        messages: list[BaseMessage],
+    ) -> AsyncIterator[str]:
+        """Yield SSE-formatted strings (event/data lines) for the agent's response."""
+        config = {"configurable": {"thread_id": thread_id}}
+        async for chunk, _meta in self._agent.astream(
+            {"messages": messages},
+            config=config,
+            context=context,
+            stream_mode="messages",
+        ):
+            text = getattr(chunk, "content", None)
+            if isinstance(text, str) and text:
+                yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+        yield "event: done\ndata: {}\n\n"
+
+    async def has_state(self, thread_id: str) -> bool:
+        """Returns True if the checkpointer has messages for this thread."""
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await self._checkpointer.aget(config)
+        return state is not None and bool(state.get("channel_values", {}).get("messages"))
+
+    async def get_messages(self, thread_id: str) -> list[BaseMessage]:
+        """Returns all stored messages for the thread (for close-session and history)."""
+        config = {"configurable": {"thread_id": thread_id}}
+        state = await self._checkpointer.aget(config)
+        if state is None:
+            return []
+        if isinstance(state, dict):
+            return state.get("channel_values", {}).get("messages", [])
+        return state.get("messages", []) or []
 
 
-def get_agent():
-    if _agent is None:
-        raise RuntimeError("Agent not initialized — call init_agent in lifespan")
-    return _agent
-
-
-def get_checkpointer():
-    if _checkpointer is None:
-        raise RuntimeError("Checkpointer not initialized")
-    return _checkpointer
-
-
-async def stream_agent_response(
-    thread_id: str,
-    user_id: str,
-    jwt: str,
-    new_messages: list[BaseMessage],
-    seed_system_prompt: str | None = None,
-) -> AsyncIterator[str]:
-    """Yield SSE-formatted strings (event/data lines) for the agent's response."""
-    config = {"configurable": {"thread_id": thread_id}}
-    context = {"user_id": user_id, "jwt": jwt}
-
-    if seed_system_prompt is not None:
-        new_messages = [SystemMessage(seed_system_prompt), *new_messages]
-
-    async for chunk, _meta in get_agent().astream(
-        {"messages": new_messages},
-        config=config,
-        context=context,
-        stream_mode="messages",
-    ):
-        text = getattr(chunk, "content", None)
-        if isinstance(text, str) and text:
-            yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
-    yield "event: done\ndata: {}\n\n"
-
-
-async def thread_has_state(thread_id: str) -> bool:
-    config = {"configurable": {"thread_id": thread_id}}
-    state = await get_checkpointer().aget(config)
-    return state is not None and bool(state.get("channel_values", {}).get("messages"))
+agent_service = AgentService()

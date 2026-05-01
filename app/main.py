@@ -21,7 +21,10 @@ from app.schemas.api import (
     CoachChatResponse,
 )
 from app.services.features import extract_features, features_to_llm_summary
-from app.services.llm import run_tilt_detector, run_decision_dna, run_coach_chat
+from app.services.tilt_detector import run_tilt_detector
+from app.services.dna_decision import run_decision_dna
+from app.services.coach import run_coach_chat
+
 from app.routers import games as games_router
 from app.routers import agent as agent_router
 
@@ -33,12 +36,12 @@ async def lifespan(app: FastAPI):
         from app.database import engine, Base
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        from app.services.agent import init_agent, shutdown_agent
-        await init_agent(settings.database_url, in_memory=False)
+        from app.services.agent import agent_service
+        await agent_service.init(settings.database_url, in_memory=False)
         try:
             yield
         finally:
-            await shutdown_agent()
+            await agent_service.shutdown()
     else:
         yield
 

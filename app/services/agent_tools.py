@@ -2,18 +2,26 @@
 
 Tools split into two layers:
   - `_*_impl(db, user_id, ...)` — pure async DB function, used by tests.
-  - `@tool` wrappers — get db + user_id from ToolRuntime, call the impl.
-
-This split keeps tools testable without spinning up a runtime.
+  - `@tool` wrappers — get user_id from ToolRuntime[AgentContext], call the impl.
 """
+from dataclasses import dataclass
 from typing import Any
-from langchain.tools import tool, ToolRuntime
+
+from langchain.tools import tool
+from langgraph.prebuilt.tool_node import ToolRuntime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import AsyncSessionLocal
 from app.models import Game, TiltReport, GameSummary
+
+
+@dataclass
+class AgentContext:
+    user_id: str
+    jwt: str
+
 
 _FILTER_KEYWORDS = {
     "losses": ("result", "loss"),
@@ -105,7 +113,7 @@ async def _get_game_details_impl(
 
 
 @tool
-async def list_past_games(filter: str | None, runtime: ToolRuntime) -> list[dict]:
+async def list_past_games(filter: str | None, runtime: ToolRuntime[AgentContext]) -> list[dict]:
     """List the user's past games, most recent first (max 20).
 
     Args:
@@ -115,19 +123,19 @@ async def list_past_games(filter: str | None, runtime: ToolRuntime) -> list[dict
     Returns a list of {game_id, played_at, result, player_color, tilt_pattern,
     summary_excerpt}.
     """
-    user_id = runtime.context["user_id"]
+    user_id = runtime.context.user_id
     async with AsyncSessionLocal() as db:
         return await _list_past_games_impl(db, user_id, filter)
 
 
 @tool
-async def get_game_details(game_id: str, runtime: ToolRuntime) -> dict:
+async def get_game_details(game_id: str, runtime: ToolRuntime[AgentContext]) -> dict:
     """Fetch the full record for one game, including PGN, evals, times,
     tilt report, and chat summary.
 
     If the game doesn't exist or doesn't belong to the user, returns
     {"error": "not found"}.
     """
-    user_id = runtime.context["user_id"]
+    user_id = runtime.context.user_id
     async with AsyncSessionLocal() as db:
         return await _get_game_details_impl(db, user_id, game_id)

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Game, DecisionDNA
 from app.services.features import extract_features
-from app.services.llm import run_decision_dna
+from app.services.dna_decision import run_decision_dna
 
 DNA_TRIGGER_INTERVAL = 5
 

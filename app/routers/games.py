@@ -15,7 +15,7 @@ from app.schemas.api import (
     TiltReportOut,
 )
 from app.services.features import extract_features
-from app.services.llm import run_tilt_detector
+from app.services.tilt_detector import run_tilt_detector
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 

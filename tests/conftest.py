@@ -86,11 +86,12 @@ async def pro_client(db: AsyncSession) -> AsyncClient:
 @pytest_asyncio.fixture(autouse=True)
 async def _agent_in_memory():
     """Force agent to use MemorySaver in tests (no Postgres)."""
-    from app.services import agent as agent_module
-    await agent_module.init_agent(database_url="", in_memory=True)
+    from app.services.agent import agent_service
+    await agent_service.init(database_url="", in_memory=True)
     yield
-    agent_module._agent = None
-    agent_module._checkpointer = None
+    agent_service._agent = None
+    agent_service._checkpointer = None
+    agent_service._prompt_cache = {}
 
 
 @pytest_asyncio.fixture(autouse=True)

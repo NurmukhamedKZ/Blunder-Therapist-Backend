@@ -2,7 +2,7 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
-from langchain.messages import HumanMessage
+from langchain_core.messages import HumanMessage
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,9 +14,8 @@ from app.schemas.agent import (
     ObserveRequest, MessageRequest, CloseSessionRequest,
     HistoryMessage, HistoryResponse,
 )
-from app.services.agent import (
-    build_system_prompt, stream_agent_response, thread_has_state, get_checkpointer,
-)
+from app.services.agent import agent_service
+from app.services.agent_tools import AgentContext
 from app.services.dna_job import should_recompute_dna, run_dna_for_user
 from app.services.summarizer import summarize_chat
 
@@ -50,9 +49,7 @@ async def observe(
     db: AsyncSession = Depends(get_db),
 ):
     jwt_token = _extract_jwt(request)
-
-    is_first = not await thread_has_state(req.thread_id)
-    seed = await build_system_prompt(db, user.user_id) if is_first else None
+    ctx = AgentContext(user_id=user.user_id, jwt=jwt_token)
 
     if req.event == "game_start":
         async def _empty():
@@ -82,14 +79,11 @@ async def observe(
             + "\n\nReact conversationally — don't repeat the report verbatim, riff on it."
         )
         new_msgs = [HumanMessage(tilt_text)]
-    else:  # blunder
+    else:
         new_msgs = [HumanMessage(_format_observation_message(req.event, req.payload))]
 
     return StreamingResponse(
-        stream_agent_response(
-            thread_id=req.thread_id, user_id=user.user_id, jwt=jwt_token,
-            new_messages=new_msgs, seed_system_prompt=seed,
-        ),
+        agent_service.stream(req.thread_id, ctx, new_msgs),
         media_type="text/event-stream",
     )
 
@@ -102,13 +96,9 @@ async def message(
     db: AsyncSession = Depends(get_db),
 ):
     jwt_token = _extract_jwt(request)
-    is_first = not await thread_has_state(req.thread_id)
-    seed = await build_system_prompt(db, user.user_id) if is_first else None
+    ctx = AgentContext(user_id=user.user_id, jwt=jwt_token)
     return StreamingResponse(
-        stream_agent_response(
-            thread_id=req.thread_id, user_id=user.user_id, jwt=jwt_token,
-            new_messages=[HumanMessage(req.text)], seed_system_prompt=seed,
-        ),
+        agent_service.stream(req.thread_id, ctx, [HumanMessage(req.text)]),
         media_type="text/event-stream",
     )
 
@@ -119,23 +109,13 @@ async def close_session(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Idempotency check
     existing = await db.execute(
         select(GameSummary).where(GameSummary.game_id == req.thread_id)
     )
     if existing.scalar_one_or_none() is not None:
         return Response(status_code=204)
 
-    # Pull messages from checkpointer
-    config = {"configurable": {"thread_id": req.thread_id}}
-    state = await get_checkpointer().aget(config)
-    raw_msgs = []
-    if state is not None:
-        if isinstance(state, dict):
-            raw_msgs = state.get("channel_values", {}).get("messages", [])
-        else:
-            raw_msgs = state.get("messages", []) or []
-
+    raw_msgs = await agent_service.get_messages(req.thread_id)
     msgs_dicts = []
     for m in raw_msgs:
         role = _ROLE_MAP.get(getattr(m, "type", ""), "system")
@@ -145,7 +125,6 @@ async def close_session(
 
     summary = await summarize_chat(msgs_dicts)
 
-    # Verify the thread_id maps to a real game owned by the user before saving.
     game_row = await db.execute(
         select(Game).where(Game.id == req.thread_id, Game.user_id == user.user_id)
     )
@@ -159,7 +138,6 @@ async def close_session(
     ))
     await db.commit()
 
-    # DNA trigger
     total = (await db.execute(
         select(func.count()).where(Game.user_id == user.user_id)
     )).scalar_one()
@@ -167,7 +145,7 @@ async def close_session(
         try:
             await run_dna_for_user(db, user.user_id)
         except Exception:
-            pass  # logged separately, never block the session close
+            pass
 
     return Response(status_code=204)
 
@@ -178,15 +156,7 @@ async def history(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    config = {"configurable": {"thread_id": thread_id}}
-    state = await get_checkpointer().aget(config)
-    raw = []
-    if state is not None:
-        if isinstance(state, dict):
-            raw = state.get("channel_values", {}).get("messages", [])
-        else:
-            raw = state.get("messages", []) or []
-
+    raw = await agent_service.get_messages(thread_id)
     out = []
     for m in raw:
         role = _ROLE_MAP.get(getattr(m, "type", ""), "system")
