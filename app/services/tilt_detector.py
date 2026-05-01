@@ -34,7 +34,7 @@ class TiltLLMResponse(BaseModel):
     evidence_plies: list[int] = Field(description="ply numbers cited in the diagnosis")
     suggestion: str = Field(description="one concrete behavioral suggestion, 1-2 sentences, not a chess tip")
 
-model_structured = model.with_structured_output(TiltLLMResponse)
+# model_structured = model.with_structured_output(TiltLLMResponse)
 
 
 # ---------- TILT DETECTOR ----------
@@ -72,13 +72,13 @@ async def run_tilt_detector(features: GameFeatures) -> TiltLLMResponse:
     t0 = time.monotonic()
     log.info("tilt_start")
     try:
-        response = await model_structured.ainvoke([
+        response = await model.ainvoke([
             SystemMessage(TILT_DETECTOR_SYSTEM),
             HumanMessage(f"Analyze this game.\n\n{summary}")
         ])
         duration_ms = round((time.monotonic() - t0) * 1000)
         log.info("tilt_done", duration_ms=duration_ms)
-        return response
+        return json.loads(response.content)
     except Exception:
         log.error("tilt_error", exc_info=True)
         raise
