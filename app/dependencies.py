@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -12,20 +13,70 @@ from app.models import Profile
 
 _bearer = HTTPBearer()
 
+# Cache JWKS public keys so we only fetch them once
+_jwks_cache: dict[str, dict] = {}
+
+
+def _get_jwks_keys() -> dict[str, dict]:
+    """Fetch and cache JWKS public keys from Supabase."""
+    if _jwks_cache:
+        return _jwks_cache
+    jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
+    resp = httpx.get(jwks_url, timeout=10)
+    resp.raise_for_status()
+    for key_data in resp.json().get("keys", []):
+        kid = key_data["kid"]
+        _jwks_cache[kid] = key_data
+    return _jwks_cache
+
 
 def _decode_token(token: str) -> dict:
+    # Peek at the header to get kid and alg
     try:
-        return jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
+        header = jwt.get_unverified_header(token)
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         ) from exc
+
+    alg = header.get("alg", "HS256")
+
+    if alg == "ES256":
+        kid = header.get("kid")
+        keys = _get_jwks_keys()
+        if kid not in keys:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unknown signing key",
+            )
+        public_key = keys[kid]
+        try:
+            return jwt.decode(
+                token,
+                public_key,
+                algorithms=["ES256"],
+                audience="authenticated",
+            )
+        except JWTError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            ) from exc
+    else:
+        # Legacy HS256 path
+        try:
+            return jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+        except JWTError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            ) from exc
 
 
 @dataclass
