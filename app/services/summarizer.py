@@ -7,6 +7,8 @@ patterns) that should inform future games.
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
+import time
+import structlog
 
 from app.config import settings
 
@@ -24,6 +26,8 @@ Extract:
 If the conversation is empty or trivial, return summary="" and key_facts=[].
 """
 
+log = structlog.get_logger()
+
 
 class ChatSummaryOutput(BaseModel):
     summary: str = Field(description="2-4 sentences focused on user's words and intent")
@@ -39,8 +43,16 @@ async def summarize_chat(messages: list[dict]) -> ChatSummaryOutput:
     """Summarize a list of {role, content} messages."""
     if not messages:
         return ChatSummaryOutput(summary="", key_facts=[])
+    
+    t0 = time.monotonic()
+    log.info("summarize_start", message_count=len(messages))
+    
     transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
-    return await _summarizer.ainvoke([
+    result = await _summarizer.ainvoke([
         SystemMessage(SUMMARIZER_SYSTEM),
         HumanMessage(transcript)
     ])
+    
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    log.info("summarize_done", duration_ms=duration_ms)
+    return result

@@ -6,6 +6,8 @@ trust the response shape. Prompts are the actual product moat - iterate
 on them aggressively.
 """
 import json
+import time
+import structlog
 from typing import Literal
 from openai import AsyncOpenAI
 from langchain.messages import HumanMessage, SystemMessage
@@ -20,6 +22,7 @@ client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 model = ChatOpenAI(model="gpt-5.4-nano", api_key=settings.openai_api_key)
 
+log = structlog.get_logger()
 
 class TiltLLMResponse(BaseModel):
     headline: str = Field(description="one short sentence, max 8 words, the core finding")
@@ -66,23 +69,16 @@ Return JSON with exactly these fields:
 async def run_tilt_detector(features: GameFeatures) -> TiltLLMResponse:
     """Run the Tilt Detector on a single game's features."""
     summary = features_to_llm_summary(features)
-    # response = await client.chat.completions.create(
-    #     model=settings.model_fast,
-    #     response_format={"type": "json_object"},
-    #     messages=[
-    #         {"role": "system", "content": TILT_DETECTOR_SYSTEM},
-    #         {
-    #             "role": "user",
-    #             "content": (
-    #                 "Analyze this game and return JSON.\n\n"
-    #                 f"{summary}"
-    #             ),
-    #         },
-    #     ],
-    #     temperature=0.7,  # some warmth, but grounded
-    # )
-    response = await model_structured.ainvoke([
-        SystemMessage(TILT_DETECTOR_SYSTEM),
-        HumanMessage(f"Analyze this game.\n\n{summary}")
-    ])
-    return response
+    t0 = time.monotonic()
+    log.info("tilt_start")
+    try:
+        response = await model_structured.ainvoke([
+            SystemMessage(TILT_DETECTOR_SYSTEM),
+            HumanMessage(f"Analyze this game.\n\n{summary}")
+        ])
+        duration_ms = round((time.monotonic() - t0) * 1000)
+        log.info("tilt_done", duration_ms=duration_ms)
+        return response
+    except Exception:
+        log.error("tilt_error", exc_info=True)
+        raise

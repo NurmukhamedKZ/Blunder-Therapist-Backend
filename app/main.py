@@ -1,10 +1,16 @@
 """Blunder Therapist FastAPI app."""
 import os
+import time
 from contextlib import asynccontextmanager
 from uuid import uuid4 as _uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+import structlog
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.logging_setup import setup_logging
+setup_logging()
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +52,35 @@ async def lifespan(app: FastAPI):
         yield
 
 
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        structlog.contextvars.clear_contextvars()
+        request_id = str(_uuid4())
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+        )
+        
+        log = structlog.get_logger()
+        client_ip = request.client.host if request.client else None
+        log.info("request_start", client_ip=client_ip)
+        
+        start_time = time.monotonic()
+        try:
+            response = await call_next(request)
+            duration_ms = round((time.monotonic() - start_time) * 1000)
+            log.info("request_end", status_code=response.status_code, duration_ms=duration_ms)
+            return response
+        except Exception:
+            duration_ms = round((time.monotonic() - start_time) * 1000)
+            log.error("request_error", duration_ms=duration_ms, exc_info=True)
+            raise
+
+
 app = FastAPI(title="Blunder Therapist API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(RequestLoggingMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +91,8 @@ app.add_middleware(
 )
 app.include_router(games_router.router)
 app.include_router(agent_router.router)
+
+log = structlog.get_logger()
 
 
 @app.get("/")
@@ -71,6 +107,8 @@ async def analyze_game(
     db: AsyncSession = Depends(get_db),
 ):
     """Run Tilt Detector on a single game; persist game + report."""
+    t0 = time.monotonic()
+    log.info("analyze_game_start", game_id=req.client_game_id)
     try:
         features = extract_features(
             pgn=req.pgn,
@@ -100,12 +138,15 @@ async def analyze_game(
     try:
         result = await run_tilt_detector(features)
     except Exception as e:
+        log.error("analyze_game_llm_error", exc_info=True)
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
     report = TiltReport(game_id=game.id, **result)
     db.add(report)
     await db.commit()
 
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    log.info("analyze_game_done", duration_ms=duration_ms, game_id=game.id)
     return TiltDetectorResponse(**result)
 
 
@@ -116,6 +157,8 @@ async def decision_dna(
     db: AsyncSession = Depends(get_db),
 ):
     """Build Decision DNA from the user's last N stored games."""
+    t0 = time.monotonic()
+    log.info("decision_dna_request", game_count=req.n)
     rows = await db.execute(
         select(Game)
         .where(Game.user_id == user.user_id)
@@ -138,6 +181,9 @@ async def decision_dna(
             for g in games
         ]
         result = await run_decision_dna(all_features)
+        
+        duration_ms = round((time.monotonic() - t0) * 1000)
+        log.info("decision_dna_done", duration_ms=duration_ms)
         return DecisionDNAResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -150,6 +196,8 @@ async def coach_chat(
     db: AsyncSession = Depends(get_db),
 ):
     """Chat with the memory-aware AI coach using stored game history."""
+    t0 = time.monotonic()
+    log.info("coach_request")
     rows = await db.execute(
         select(Game)
         .where(Game.user_id == user.user_id)
@@ -175,4 +223,7 @@ async def coach_chat(
     game_memory = "\n\n".join(memory_parts) if memory_parts else "No games on file yet."
     history = [{"role": t.role, "content": t.content} for t in req.history]
     reply = await run_coach_chat(req.message, history, game_memory)
+    
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    log.info("coach_done", duration_ms=duration_ms)
     return CoachChatResponse(reply=reply)

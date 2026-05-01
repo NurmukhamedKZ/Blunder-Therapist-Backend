@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import time
+import structlog
 from typing import AsyncIterator
 
 from langchain.agents import create_agent
@@ -17,6 +19,9 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models import GameSummary, DecisionDNA
 from app.services.agent_tools import AgentContext, list_past_games, get_game_details
+from app.logging_setup import ToolCallLogger
+
+log = structlog.get_logger()
 
 BASE_SYSTEM = """You are the user's per-game chess coach inside their game-analysis sidebar.
 
@@ -112,6 +117,8 @@ class AgentService:
             self._pg_cm = AsyncPostgresSaver.from_conn_string(pg_url)
             self._checkpointer = await self._pg_cm.__aenter__()
             await self._checkpointer.setup()
+            
+        log.info("agent_init", checkpointer_type=type(self._checkpointer).__name__)
 
         @dynamic_prompt
         async def _personalized_prompt(request: ModelRequest[AgentContext]) -> str:
@@ -120,11 +127,13 @@ class AgentService:
                 if request.runtime and request.runtime.execution_info
                 else None
             )
-            if thread_id and thread_id in self._prompt_cache:
-                return self._prompt_cache[thread_id]
             user_id = request.runtime.context.user_id
+            if thread_id and thread_id in self._prompt_cache:
+                log.info("prompt_cache_hit", thread_id=thread_id, user_id=user_id)
+                return self._prompt_cache[thread_id]
             prompt = await _build_prompt_for_user(user_id)
             if thread_id:
+                log.info("prompt_cache_miss", thread_id=thread_id, user_id=user_id)
                 self._prompt_cache[thread_id] = prompt
             return prompt
 
@@ -144,6 +153,7 @@ class AgentService:
         if self._pg_cm is not None:
             await self._pg_cm.__aexit__(None, None, None)
             self._pg_cm = None
+        log.info("agent_shutdown")
 
     async def stream(
         self,
@@ -152,17 +162,30 @@ class AgentService:
         messages: list[BaseMessage],
     ) -> AsyncIterator[str]:
         """Yield SSE-formatted strings (event/data lines) for the agent's response."""
-        config = {"configurable": {"thread_id": thread_id}}
-        async for chunk, _meta in self._agent.astream(
-            {"messages": messages},
-            config=config,
-            context=context,
-            stream_mode="messages",
-        ):
-            text = getattr(chunk, "content", None)
-            if isinstance(text, str) and text:
-                yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
-        yield "event: done\ndata: {}\n\n"
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [ToolCallLogger("agent")]
+        }
+        log.info("stream_start", thread_id=thread_id, message_count=len(messages))
+        t0 = time.monotonic()
+        token_count = 0
+        try:
+            async for chunk, _meta in self._agent.astream(
+                {"messages": messages},
+                config=config,
+                context=context,
+                stream_mode="messages",
+            ):
+                text = getattr(chunk, "content", None)
+                if isinstance(text, str) and text:
+                    token_count += 1
+                    yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+            duration_ms = round((time.monotonic() - t0) * 1000)
+            log.info("stream_done", thread_id=thread_id, duration_ms=duration_ms, token_count=token_count)
+            yield "event: done\ndata: {}\n\n"
+        except Exception:
+            log.error("stream_error", thread_id=thread_id, exc_info=True)
+            raise
 
     async def has_state(self, thread_id: str) -> bool:
         """Returns True if the checkpointer has messages for this thread."""

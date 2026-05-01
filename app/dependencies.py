@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import httpx
+import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -12,6 +13,8 @@ from app.database import get_db
 from app.models import Profile
 
 _bearer = HTTPBearer()
+
+log = structlog.get_logger()
 
 # Cache JWKS public keys so we only fetch them once
 _jwks_cache: dict[str, dict] = {}
@@ -35,6 +38,7 @@ def _decode_token(token: str) -> dict:
     try:
         header = jwt.get_unverified_header(token)
     except JWTError as exc:
+        log.warning("auth_error", details="Invalid or expired token header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -59,6 +63,7 @@ def _decode_token(token: str) -> dict:
                 audience="authenticated",
             )
         except JWTError as exc:
+            log.warning("auth_error", details="Invalid or expired ES256 token")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
@@ -73,6 +78,7 @@ def _decode_token(token: str) -> dict:
                 audience="authenticated",
             )
         except JWTError as exc:
+            log.warning("auth_error", details="Invalid or expired HS256 token")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
@@ -97,11 +103,13 @@ async def get_current_user(
     result = await db.execute(select(Profile).where(Profile.user_id == user_id))
     profile = result.scalar_one_or_none()
     if profile is None:
+        log.info("new_user_created", user_id=user_id)
         profile = Profile(user_id=user_id, plan="free")
         db.add(profile)
         await db.commit()
         await db.refresh(profile)
 
+    structlog.contextvars.bind_contextvars(user_id=user_id)
     return CurrentUser(user_id=user_id, plan=profile.plan)
 
 

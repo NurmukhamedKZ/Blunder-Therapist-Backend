@@ -20,5 +20,9 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # Logging
+    log_level: str = "INFO"
+    log_format: str = "console"
+
 
 settings = Settings()

@@ -1,4 +1,5 @@
 """Game history endpoints."""
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,8 @@ from app.services.features import extract_features
 from app.services.tilt_detector import run_tilt_detector
 
 router = APIRouter(prefix="/api/games", tags=["games"])
+
+log = structlog.get_logger()
 
 
 def _report_out(report: TiltReport | None) -> TiltReportOut | None:
@@ -54,6 +57,7 @@ async def list_games(
         .limit(page_size)
     )
     games = rows.scalars().all()
+    log.info("game_list", page=page, count=len(games))
 
     return GameListResponse(
         games=[
@@ -85,6 +89,7 @@ async def get_game(
     if game is None:
         raise HTTPException(status_code=404, detail="Game not found")
 
+    log.info("game_detail", game_id=game_id)
     return GameDetailResponse(
         id=game.id,
         pgn=game.pgn,
@@ -104,6 +109,7 @@ async def rerun_report(
     db: AsyncSession = Depends(get_db),
 ):
     """Re-run tilt detector on a stored game (e.g., if LLM failed originally)."""
+    log.info("report_requested", game_id=game_id)
     row = await db.execute(
         select(Game)
         .options(selectinload(Game.tilt_report))

@@ -6,6 +6,8 @@ trust the response shape. Prompts are the actual product moat - iterate
 on them aggressively.
 """
 import json
+import time
+import structlog
 from typing import Literal
 from openai import AsyncOpenAI
 from langchain.messages import HumanMessage, SystemMessage
@@ -19,6 +21,8 @@ from app.services.features import GameFeatures, features_to_llm_summary
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 model = ChatOpenAI(model="gpt-5.4-nano", api_key=settings.openai_api_key)
+
+log = structlog.get_logger()
 
 # ---------- COACH CHAT ----------
 
@@ -43,6 +47,9 @@ async def run_coach_chat(
     """Chat with the AI coach. Stateless on the LLM side - we pass full
     history each call.
     """
+    t0 = time.monotonic()
+    log.info("coach_start")
+    
     messages = [
         {"role": "system", "content": COACH_SYSTEM},
         {
@@ -58,4 +65,7 @@ async def run_coach_chat(
         temperature=0.7,
         max_tokens=600,
     )
+    
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    log.info("coach_done", duration_ms=duration_ms)
     return response.choices[0].message.content

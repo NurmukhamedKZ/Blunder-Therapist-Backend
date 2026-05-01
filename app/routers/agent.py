@@ -1,5 +1,6 @@
 """Agent chat endpoints."""
 import json
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
 from langchain_core.messages import HumanMessage
@@ -20,6 +21,8 @@ from app.services.dna_job import should_recompute_dna, run_dna_for_user
 from app.services.summarizer import summarize_chat
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+log = structlog.get_logger()
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 
@@ -50,6 +53,8 @@ async def observe(
 ):
     jwt_token = _extract_jwt(request)
     ctx = AgentContext(user_id=user.user_id, jwt=jwt_token)
+    run_log = log.bind(thread_id=req.thread_id)
+    run_log.info("observe_event", game_event=req.event)
 
     if req.event == "game_start":
         async def _empty():
@@ -97,6 +102,8 @@ async def message(
 ):
     jwt_token = _extract_jwt(request)
     ctx = AgentContext(user_id=user.user_id, jwt=jwt_token)
+    run_log = log.bind(thread_id=req.thread_id)
+    run_log.info("message_received", text_length=len(req.text))
     return StreamingResponse(
         agent_service.stream(req.thread_id, ctx, [HumanMessage(req.text)]),
         media_type="text/event-stream",
@@ -109,10 +116,14 @@ async def close_session(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    run_log = log.bind(thread_id=req.thread_id)
+    run_log.info("close_session_start")
+
     existing = await db.execute(
         select(GameSummary).where(GameSummary.game_id == req.thread_id)
     )
     if existing.scalar_one_or_none() is not None:
+        run_log.info("close_session_skipped", reason="already_exists")
         return Response(status_code=204)
 
     raw_msgs = await agent_service.get_messages(req.thread_id)
@@ -130,6 +141,7 @@ async def close_session(
     )
     game = game_row.scalar_one_or_none()
     if game is None:
+        run_log.info("close_session_skipped", reason="game_not_found")
         return Response(status_code=204)
 
     db.add(GameSummary(
@@ -147,6 +159,7 @@ async def close_session(
         except Exception:
             pass
 
+    run_log.info("close_session_done", msg_count=len(msgs_dicts), dna_triggered=should_recompute_dna(total))
     return Response(status_code=204)
 
 
@@ -163,4 +176,6 @@ async def history(
         if role == "system":
             continue
         out.append(HistoryMessage(role=role, content=getattr(m, "content", "")))
+        
+    log.info("history_fetched", thread_id=thread_id, message_count=len(out))
     return HistoryResponse(messages=out)

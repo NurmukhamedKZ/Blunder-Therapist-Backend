@@ -6,6 +6,8 @@ trust the response shape. Prompts are the actual product moat - iterate
 on them aggressively.
 """
 import json
+import time
+import structlog
 from typing import Literal
 from openai import AsyncOpenAI
 from langchain.messages import HumanMessage, SystemMessage
@@ -19,6 +21,8 @@ from app.services.features import GameFeatures, features_to_llm_summary
 client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 model = ChatOpenAI(model="gpt-5.4-nano", api_key=settings.openai_api_key)
+
+log = structlog.get_logger()
 
 # ---------- DECISION DNA ----------
 
@@ -55,6 +59,9 @@ async def run_decision_dna(games: list[GameFeatures]) -> dict:
     """Build a Decision DNA profile from N games."""
     if len(games) < 3:
         raise ValueError("Need at least 3 games for a meaningful DNA profile")
+
+    t0 = time.monotonic()
+    log.info("dna_start", game_count=len(games))
 
     # Aggregate across games
     total_blunders = sum(g.blunder_count for g in games)
@@ -98,6 +105,8 @@ async def run_decision_dna(games: list[GameFeatures]) -> dict:
         ],
         temperature=0.85,  # higher creativity for vivid archetype
     )
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    log.info("dna_done", duration_ms=duration_ms)
     return json.loads(response.choices[0].message.content)
 
 
