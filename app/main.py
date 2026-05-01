@@ -21,6 +21,7 @@ from app.schemas.api import (
 )
 from app.services.features import extract_features, features_to_llm_summary
 from app.services.llm import run_tilt_detector, run_decision_dna, run_coach_chat
+from app.routers import games as games_router
 
 
 @asynccontextmanager
@@ -43,6 +44,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(games_router.router)
 
 
 @app.get("/")
