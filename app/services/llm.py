@@ -8,6 +8,7 @@ on them aggressively.
 import json
 from typing import Literal
 from openai import AsyncOpenAI
+from langchain.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
@@ -62,25 +63,29 @@ Return JSON with exactly these fields:
 """
 
 
-async def run_tilt_detector(features: GameFeatures) -> dict:
+async def run_tilt_detector(features: GameFeatures) -> TiltLLMResponse:
     """Run the Tilt Detector on a single game's features."""
     summary = features_to_llm_summary(features)
-    response = await client.chat.completions.create(
-        model=settings.model_fast,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": TILT_DETECTOR_SYSTEM},
-            {
-                "role": "user",
-                "content": (
-                    "Analyze this game and return JSON.\n\n"
-                    f"{summary}"
-                ),
-            },
-        ],
-        temperature=0.7,  # some warmth, but grounded
-    )
-    return json.loads(response.choices[0].message.content)
+    # response = await client.chat.completions.create(
+    #     model=settings.model_fast,
+    #     response_format={"type": "json_object"},
+    #     messages=[
+    #         {"role": "system", "content": TILT_DETECTOR_SYSTEM},
+    #         {
+    #             "role": "user",
+    #             "content": (
+    #                 "Analyze this game and return JSON.\n\n"
+    #                 f"{summary}"
+    #             ),
+    #         },
+    #     ],
+    #     temperature=0.7,  # some warmth, but grounded
+    # )
+    response = await model_structured.ainvoke([
+        SystemMessage(TILT_DETECTOR_SYSTEM),
+        HumanMessage(f"Analyze this game.\n\n{summary}")
+    ])
+    return response
 
 
 # ---------- DECISION DNA ----------
