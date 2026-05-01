@@ -15,6 +15,7 @@ class AnalyzeGameRequest(BaseModel):
     time_per_ply: list[float] = Field(..., description="Seconds spent on each ply")
     player_color: Literal["white", "black"]
     result: Literal["win", "loss", "draw"]
+    client_game_id: str | None = None
 
 
 class TiltDetectorResponse(BaseModel):

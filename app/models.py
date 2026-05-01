@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, JSON, ForeignKey, UniqueConstraint
+from sqlalchemy import Integer, Text, String, DateTime, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -56,3 +56,27 @@ class TiltReport(Base):
     suggestion: Mapped[str] = mapped_column(String, nullable=False)
 
     game: Mapped["Game"] = relationship(back_populates="tilt_report")
+
+
+
+
+class GameSummary(Base):
+    __tablename__ = "game_summaries"
+    __table_args__ = (UniqueConstraint("game_id"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("profiles.user_id"), nullable=False, index=True)
+    game_id: Mapped[str] = mapped_column(String, ForeignKey("games.id"), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    key_facts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DecisionDNA(Base):
+    __tablename__ = "decision_dna"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("profiles.user_id"), nullable=False, index=True)
+    dna: Mapped[dict] = mapped_column(JSON, nullable=False)
+    games_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -1,6 +1,7 @@
 """Blunder Therapist FastAPI app."""
 import os
 from contextlib import asynccontextmanager
+from uuid import uuid4 as _uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,17 +23,24 @@ from app.schemas.api import (
 from app.services.features import extract_features, features_to_llm_summary
 from app.services.llm import run_tilt_detector, run_decision_dna, run_coach_chat
 from app.routers import games as games_router
+from app.routers import agent as agent_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not os.getenv("TESTING"):
-        from app import models  # noqa: F401 — registers models on Base.metadata
-        from app.database import engine
-        from app.database import Base
+        from app import models  # noqa: F401
+        from app.database import engine, Base
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    yield
+        from app.services.agent import init_agent, shutdown_agent
+        await init_agent(settings.database_url, in_memory=False)
+        try:
+            yield
+        finally:
+            await shutdown_agent()
+    else:
+        yield
 
 
 app = FastAPI(title="Blunder Therapist API", version="0.1.0", lifespan=lifespan)
@@ -45,6 +53,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(games_router.router)
+app.include_router(agent_router.router)
 
 
 @app.get("/")
@@ -72,6 +81,7 @@ async def analyze_game(
 
     # Persist the game row first
     game = Game(
+        id=req.client_game_id or str(_uuid4()),
         user_id=user.user_id,
         pgn=req.pgn,
         eval_per_ply=req.eval_per_ply,

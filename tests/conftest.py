@@ -81,3 +81,30 @@ async def pro_client(db: AsyncSession) -> AsyncClient:
         yield c
     app.dependency_overrides.pop(get_db, None)
     app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _agent_in_memory():
+    """Force agent to use MemorySaver in tests (no Postgres)."""
+    from app.services import agent as agent_module
+    await agent_module.init_agent(database_url="", in_memory=True)
+    yield
+    agent_module._agent = None
+    agent_module._checkpointer = None
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_test_user(db):
+    """Delete known test user rows after each test to prevent UNIQUE conflicts."""
+    yield
+    from sqlalchemy import text
+    for uid in ("test-user-id", "u1", "u2"):
+        await db.execute(text(f"DELETE FROM game_summaries WHERE user_id = '{uid}'"))
+        await db.execute(text(
+            f"DELETE FROM tilt_reports WHERE game_id IN "
+            f"(SELECT id FROM games WHERE user_id = '{uid}')"
+        ))
+        await db.execute(text(f"DELETE FROM games WHERE user_id = '{uid}'"))
+        await db.execute(text(f"DELETE FROM decision_dna WHERE user_id = '{uid}'"))
+        await db.execute(text(f"DELETE FROM profiles WHERE user_id = '{uid}'"))
+    await db.commit()

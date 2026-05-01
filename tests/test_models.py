@@ -66,3 +66,21 @@ async def test_create_game_and_tilt_report(session):
     loaded = result.scalar_one()
     assert loaded.tilt_report is not None
     assert loaded.tilt_report.headline == "Test"
+
+import pytest
+from app.models import GameSummary, DecisionDNA, Profile, Game
+
+@pytest.mark.asyncio
+async def test_game_summary_persists(db):
+    db.add(Profile(user_id="u1", plan="free"))
+    g = Game(user_id="u1", pgn="", eval_per_ply=[], time_per_ply=[], player_color="white", result="win")
+    db.add(g)
+    await db.flush()
+    db.add(GameSummary(user_id="u1", game_id=g.id, summary="we talked", key_facts=["a", "b"]))
+    await db.commit()
+
+@pytest.mark.asyncio
+async def test_decision_dna_persists(db):
+    db.add(Profile(user_id="u2", plan="free"))
+    db.add(DecisionDNA(user_id="u2", dna={"type_name": "Tactician"}, games_count=5))
+    await db.commit()
