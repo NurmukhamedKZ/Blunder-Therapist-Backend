@@ -1,4 +1,5 @@
 """API request/response schemas."""
+from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel, Field
 
@@ -27,7 +28,7 @@ class TiltDetectorResponse(BaseModel):
 # ---------- Decision DNA ----------
 
 class DecisionDNARequest(BaseModel):
-    games: list[AnalyzeGameRequest] = Field(..., min_length=3)
+    n: int = Field(default=5, ge=3, le=20, description="Number of recent games to analyze")
 
 
 class GMComparison(BaseModel):
@@ -55,8 +56,41 @@ class ChatTurn(BaseModel):
 class CoachChatRequest(BaseModel):
     message: str
     history: list[ChatTurn] = Field(default_factory=list)
-    recent_games: list[AnalyzeGameRequest] = Field(default_factory=list)
 
 
 class CoachChatResponse(BaseModel):
     reply: str
+
+
+# ---------- Game History ----------
+
+class TiltReportOut(BaseModel):
+    headline: str
+    diagnosis: str
+    pattern_label: str
+    evidence_plies: list[int]
+    suggestion: str
+
+
+class GameSummary(BaseModel):
+    id: str
+    player_color: str
+    result: str
+    played_at: datetime
+    tilt_report: TiltReportOut | None
+
+
+class GameDetailResponse(BaseModel):
+    id: str
+    pgn: str
+    eval_per_ply: list[int]
+    time_per_ply: list[float]
+    player_color: str
+    result: str
+    played_at: datetime
+    tilt_report: TiltReportOut | None
+
+
+class GameListResponse(BaseModel):
+    games: list[GameSummary]
+    total: int
