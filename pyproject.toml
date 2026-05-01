@@ -1,0 +1,15 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "chess>=1.11.2",
+    "fastapi>=0.136.1",
+    "langchain>=1.2.17",
+    "langchain-openai>=1.2.1",
+    "pydantic-settings>=2.14.0",
+    "python-chess>=1.999",
+    "uvicorn[standard]>=0.46.0",
+]
