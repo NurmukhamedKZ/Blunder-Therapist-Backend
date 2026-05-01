@@ -7,11 +7,15 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str
-    model_fast: str = "gpt-4o-mini"  # for Tilt Detector + DNA
-    model_smart: str = "gpt-4o"  # for Coach chat (when context matters)
+    model_fast: str = "gpt-4o-mini"
+    model_smart: str = "gpt-4o"
 
-    # Database (Supabase Postgres connection string)
+    # Database
     database_url: str = "sqlite+aiosqlite:///./dev.db"
+
+    # Supabase Auth
+    supabase_url: str
+    supabase_jwt_secret: str
 
     # CORS
     cors_origins: list[str] = ["http://localhost:3000"]
