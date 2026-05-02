@@ -66,12 +66,14 @@ Return JSON with exactly these fields:
 """
 
 
-async def run_tilt_detector(features: GameFeatures) -> TiltLLMResponse:
+async def run_tilt_detector(features: GameFeatures) -> dict[str, str]:
     """Run the Tilt Detector on a single game's features."""
     summary = features_to_llm_summary(features)
     t0 = time.monotonic()
     log.info("tilt_start")
     try:
+        log.info(f"TILT | SYSTEM PROMPT: {TILT_DETECTOR_SYSTEM}")
+        log.info(f"TILT | USER PROMPT: Analyze this game.\n\n{summary}")
         response = await model.ainvoke([
             SystemMessage(TILT_DETECTOR_SYSTEM),
             HumanMessage(f"Analyze this game.\n\n{summary}")

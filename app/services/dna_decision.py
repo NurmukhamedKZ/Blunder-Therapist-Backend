@@ -15,7 +15,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.services.features import GameFeatures, features_to_llm_summary
+from app.services.features import GameFeatures
 
 
 client = AsyncOpenAI(api_key=settings.openai_api_key)

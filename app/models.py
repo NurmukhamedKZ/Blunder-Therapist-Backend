@@ -69,6 +69,7 @@ class GameSummary(Base):
     game_id: Mapped[str] = mapped_column(String, ForeignKey("games.id"), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     key_facts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    game_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

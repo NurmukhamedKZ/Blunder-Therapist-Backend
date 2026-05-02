@@ -33,8 +33,9 @@ Behavioral, not tactical:
 Style:
 - Short, warm, specific. Talk like a smart friend, not a therapist or a textbook.
 - When commenting on an in-game observation (e.g. "[OBSERVATION] Ply 17:
-  blunder ..."), respond with AT MOST one short paragraph, and ONLY if the
-  last thing you said is at least 5 plies ago. Otherwise output nothing.
+  blunder ..."), respond in 1-2 sentences MAX. No paragraphs, no lists.
+  Only comment if the last thing you said is at least 5 plies ago — otherwise
+  output nothing at all.
 - When the user explicitly asks something, always reply.
 
 Tools:
@@ -53,6 +54,22 @@ def _format_summaries(summaries: list[GameSummary]) -> str:
         bullets.append(f"- ({s.created_at.date()}) {s.summary}")
         for fact in s.key_facts:
             bullets.append(f"    • {fact}")
+        ga = s.game_analysis or {}
+        if ga.get("opening"):
+            bullets.append(f"    opening: {ga['opening']}")
+        if ga.get("game_result") and ga["game_result"] != "unknown":
+            bullets.append(f"    result: {ga['game_result']}")
+        for blunder in ga.get("blunders", []):
+            bullets.append(
+                f"    blunder ply {blunder['ply']}: {blunder['san']} "
+                f"({blunder['blunder_type']}) — {blunder['note']}"
+            )
+        for reason in ga.get("loss_reasons", []):
+            bullets.append(f"    loss reason: {reason}")
+        for pattern in ga.get("behavioral_patterns", []):
+            bullets.append(f"    behavior: {pattern}")
+        for area in ga.get("improvement_areas", []):
+            bullets.append(f"    improve: {area}")
     return "Recent coaching history (oldest → newest):\n" + "\n".join(bullets)
 
 
@@ -135,6 +152,8 @@ class AgentService:
             if thread_id:
                 log.info("prompt_cache_miss", thread_id=thread_id, user_id=user_id)
                 self._prompt_cache[thread_id] = prompt
+
+            log.info(f"SYSTEM PROMPT: {prompt}")
             return prompt
 
         self._agent = create_agent(
@@ -181,6 +200,7 @@ class AgentService:
                     token_count += 1
                     yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
             duration_ms = round((time.monotonic() - t0) * 1000)
+            log.info(f"USER MESSAGE: {"\n\n".join([message.content for message in messages])}")
             log.info("stream_done", thread_id=thread_id, duration_ms=duration_ms, token_count=token_count)
             yield "event: done\ndata: {}\n\n"
         except Exception:

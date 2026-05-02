@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
 from langchain_core.messages import HumanMessage
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,14 +34,27 @@ def _extract_jwt(request: Request) -> str:
 
 
 def _format_observation_message(event: str, payload: dict) -> str:
-    if event == "blunder":
-        return (
-            f"[OBSERVATION] Ply {payload.get('ply')}: blunder, "
-            f"san={payload.get('san')}, eval {payload.get('eval_before')}→"
-            f"{payload.get('eval_after')}cp, {payload.get('time_taken')}s think."
-        )
     if event == "game_start":
         return "[OBSERVATION] Game started — watch and stay quiet unless asked."
+
+    if event == "blunder":
+        moves: list[dict] = payload.get("moves_since_last_observe") or []
+        lines = [
+            f"[OBSERVATION] Blunder at ply {payload.get('ply')} "
+            f"({payload.get('san')}): eval {payload.get('eval_before')}→"
+            f"{payload.get('eval_after')}cp in {payload.get('time_taken')}s.",
+        ]
+        if moves:
+            lines.append("Moves leading here (ply / san / eval_after / time):")
+            for m in moves:
+                marker = " ← BLUNDER" if m["ply"] == payload.get("ply") else ""
+                lines.append(
+                    f"  ply {m['ply']}: {m['san']:<8} "
+                    f"eval={m['eval_after']:+d}cp  t={m['time_sec']:.1f}s{marker}"
+                )
+        lines.append("\nRespond in 1-2 sentences max. Be brief and direct.")
+        return "\n".join(lines)
+
     return f"[OBSERVATION] {event}: {json.dumps(payload)}"
 
 
@@ -61,7 +75,7 @@ async def observe(
             yield "event: done\ndata: {}\n\n"
         return StreamingResponse(_empty(), media_type="text/event-stream")
 
-    if req.event == "game_end":
+    elif req.event == "game_end":
         game_id = req.payload.get("game_id") or req.thread_id
         row = await db.execute(
             select(Game)
@@ -72,19 +86,26 @@ async def observe(
         if game is None or game.tilt_report is None:
             raise HTTPException(status_code=404, detail="game or tilt report not found")
         tr = game.tilt_report
-        tilt_text = (
-            "The game just ended. Here's the tilt analysis:\n"
-            + json.dumps({
-                "headline": tr.headline,
-                "diagnosis": tr.diagnosis,
-                "pattern_label": tr.pattern_label,
-                "evidence_plies": tr.evidence_plies,
-                "suggestion": tr.suggestion,
-            })
-            + "\n\nReact conversationally — don't repeat the report verbatim, riff on it."
-        )
+        all_moves: list[dict] = req.payload.get("all_moves") or []
+        tilt_text = "The game just ended. Here's the tilt analysis:\n" + json.dumps({
+            "headline": tr.headline,
+            "diagnosis": tr.diagnosis,
+            "pattern_label": tr.pattern_label,
+            "evidence_plies": tr.evidence_plies,
+            "suggestion": tr.suggestion,
+        })
+        if all_moves:
+            evidence = set(tr.evidence_plies or [])
+            tilt_text += "\n\nFull game move list (ply / san / eval_after / time):\n"
+            tilt_text += "\n".join(
+                f"  ply {m['ply']}: {m['san']:<8} "
+                f"eval={m['eval_after']:+d}cp  t={m['time_sec']:.1f}s"
+                + (" <<<" if m["ply"] in evidence else "")
+                for m in all_moves
+            )
+        tilt_text += "\n\nReact conversationally — don't repeat the report verbatim, riff on it."
         new_msgs = [HumanMessage(tilt_text)]
-    else:
+    elif req.event == "blunder":
         new_msgs = [HumanMessage(_format_observation_message(req.event, req.payload))]
 
     return StreamingResponse(
@@ -146,9 +167,16 @@ async def close_session(
 
     db.add(GameSummary(
         user_id=user.user_id, game_id=game.id,
-        summary=summary.summary, key_facts=summary.key_facts,
+        summary=summary.summary,
+        key_facts=summary.key_facts,
+        game_analysis=summary.game_analysis.model_dump() if summary.game_analysis else None,
     ))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        run_log.info("close_session_skipped", reason="concurrent_insert")
+        return Response(status_code=204)
 
     total = (await db.execute(
         select(func.count()).where(Game.user_id == user.user_id)

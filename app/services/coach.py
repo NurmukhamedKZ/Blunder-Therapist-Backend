@@ -59,6 +59,8 @@ async def run_coach_chat(
         *history,
         {"role": "user", "content": user_message},
     ]
+    log.info(f"COACH MESSAGES: {messages}")
+    
     response = await client.chat.completions.create(
         model=settings.model_smart,
         messages=messages,

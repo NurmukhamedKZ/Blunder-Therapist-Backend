@@ -224,22 +224,11 @@ def extract_features(
 
 
 def features_to_llm_summary(f: GameFeatures) -> str:
-    """Convert features to a compact, LLM-readable summary.
+    """Convert features to an LLM-readable summary with the full move list.
 
-    We deliberately DON'T dump every move - the LLM doesn't need them. We
-    give it the aggregate signals + the 3-5 most important moments.
+    Every move is included so the tilt detector can see timing patterns across
+    the whole game, not just around blunders.
     """
-    # Pick the moments that matter: blunders + the move just before each blunder
-    important_plies: set[int] = set()
-    for m in f.moves:
-        if m.side == f.player_color and (m.is_blunder or m.is_mistake):
-            important_plies.add(m.ply)
-            if m.ply >= 2:
-                important_plies.add(m.ply - 2)  # opponent's move before mine
-                important_plies.add(m.ply - 1)  # the position right before
-
-    critical_moments = [m for m in f.moves if m.ply in important_plies]
-
     lines = [
         f"GAME SUMMARY (player = {f.player_color}, result = {f.result})",
         f"  Total moves played: {f.total_moves}",
@@ -248,6 +237,8 @@ def features_to_llm_summary(f: GameFeatures) -> str:
         "",
         "TIMING SIGNAL (this is where psychology shows up):",
         f"  Avg time per move: {f.avg_time_per_move}s",
+        f"  Median time per move: {f.median_time_per_move}s",
+        f"  Fastest move: {f.fastest_move_sec}s | Slowest move: {f.slowest_move_sec}s",
         f"  Avg time on blundered moves: {f.avg_time_before_blunders}s",
         f"  Blunder-speed ratio: {f.blunder_speed_ratio}",
         f"    (< 0.5 = rushed-while-blundering = TILT signal)",
@@ -257,14 +248,16 @@ def features_to_llm_summary(f: GameFeatures) -> str:
         + (f" - started at ply {f.cascade_start_ply}" if f.has_blunder_cascade else ""),
         f"PHASE BLUNDERS: opening={f.opening_blunders}, middlegame={f.middlegame_blunders}, endgame={f.endgame_blunders}",
         "",
-        "CRITICAL MOMENTS:",
+        "FULL MOVE LIST (every ply, both sides):",
+        "  format: ply(side) move  [eval before->after, delta for mover, time, quality]",
     ]
-    for m in critical_moments[:12]:  # cap to avoid bloating the prompt
+    for m in f.moves:
+        marker = " <<<" if m.is_blunder else (" <<" if m.is_mistake else (" <" if m.is_inaccuracy else ""))
         lines.append(
-            f"  ply {m.ply} ({m.side}): {m.san}  "
-            f"[eval {m.eval_before:+d} -> {m.eval_after:+d}, "
-            f"delta {m.eval_delta:+d}, "
-            f"thought {m.time_spent_sec:.1f}s, "
-            f"quality={m.move_quality}]"
+            f"  ply {m.ply} ({m.side[0]}): {m.san:<8} "
+            f"[eval {m.eval_before:+d}->{m.eval_after:+d}, "
+            f"Δ{m.eval_delta:+d}, "
+            f"t={m.time_spent_sec:.1f}s, "
+            f"{m.move_quality}]{marker}"
         )
     return "\n".join(lines)
