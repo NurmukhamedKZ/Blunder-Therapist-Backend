@@ -95,3 +95,24 @@ class GameDetailResponse(BaseModel):
 class GameListResponse(BaseModel):
     games: list[GameSummary]
     total: int
+
+
+# ---------- Game Import ----------
+
+class ImportRequest(BaseModel):
+    platform: Literal["chess.com", "lichess"]
+    username: str
+    period_days: Literal[30, 90]
+
+
+class ImportJobStatus(BaseModel):
+    job_id: str
+    status: Literal["pending", "running", "done", "failed"]
+    total_games: int
+    processed_games: int
+    error: str | None
+    finished_at: datetime | None
+
+
+class ImportJobListResponse(BaseModel):
+    jobs: list[ImportJobStatus]

@@ -33,15 +33,29 @@ from app.services.coach import run_coach_chat
 
 from app.routers import games as games_router
 from app.routers import agent as agent_router
+from app.routers import imports as imports_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not os.getenv("TESTING"):
         from app import models  # noqa: F401
-        from app.database import engine, Base
+        from app.database import engine, Base, AsyncSessionLocal
+        from app.models import ImportJob
+        from sqlalchemy import update as sa_update
+
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+        # Reset any import jobs that were mid-run when the server last stopped
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                sa_update(ImportJob)
+                .where(ImportJob.status == "running")
+                .values(status="failed", error="Server restarted during import")
+            )
+            await db.commit()
+
         from app.services.agent import agent_service
         await agent_service.init(settings.database_url, in_memory=False)
         try:
@@ -91,6 +105,7 @@ app.add_middleware(
 )
 app.include_router(games_router.router)
 app.include_router(agent_router.router)
+app.include_router(imports_router.router)
 
 log = structlog.get_logger()
 
