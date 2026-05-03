@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Return cors_origins as a list, handling potential string input from env."""
+        if isinstance(self.cors_origins, str):
+            return [origin.strip() for origin in self.cors_origins.split(",")]
+        return self.cors_origins
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "console"
