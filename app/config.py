@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] | str = ["http://localhost:3000"]
 
     @property
     def cors_origins_list(self) -> list[str]:
