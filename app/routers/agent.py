@@ -107,11 +107,32 @@ async def observe(
         new_msgs = [HumanMessage(tilt_text)]
     elif req.event == "blunder":
         new_msgs = [HumanMessage(_format_observation_message(req.event, req.payload))]
-
-    return StreamingResponse(
+    elif req.event == "arrival":
+        # Get last few games to provide context for the greeting
+        res = await db.execute(
+            select(Game)
+            .where(Game.user_id == user.user_id)
+            .order_by(Game.played_at.desc())
+            .limit(3)
+        )
+        recent_games = res.scalars().all()
+        
+        arrival_text = "[OBSERVATION] User just arrived at the dashboard."
+        if recent_games:
+            arrival_text += "\nRecent games summary:"
+            for g in recent_games:
+                arrival_text += f"\n- {g.played_at.date()}: {g.result} as {g.player_color}"
+        
+        arrival_text += "\n\nGreet the user warmly. Mention their recent performance if relevant. Keep it brief (2-3 sentences)."
+        new_msgs = [HumanMessage(arrival_text)]
+    else:
+        new_msgs = [HumanMessage(_format_observation_message(req.event, req.payload))]
+    
+    StreamingResponse(
         agent_service.stream(req.thread_id, ctx, new_msgs),
         media_type="text/event-stream",
     )
+    
 
 
 @router.post("/message")

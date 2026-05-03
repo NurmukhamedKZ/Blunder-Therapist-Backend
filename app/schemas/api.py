@@ -79,6 +79,8 @@ class GameSummary(BaseModel):
     result: str
     played_at: datetime
     tilt_report: TiltReportOut | None
+    opponent_name: str | None = None
+    platform: str | None = None
 
 
 class GameDetailResponse(BaseModel):
@@ -90,6 +92,8 @@ class GameDetailResponse(BaseModel):
     result: str
     played_at: datetime
     tilt_report: TiltReportOut | None
+    opponent_name: str | None = None
+    platform: str | None = None
 
 
 class GameListResponse(BaseModel):

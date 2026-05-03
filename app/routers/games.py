@@ -1,4 +1,5 @@
 """Game history endpoints."""
+import re
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
@@ -21,6 +22,28 @@ from app.services.tilt_detector import run_tilt_detector
 router = APIRouter(prefix="/api/games", tags=["games"])
 
 log = structlog.get_logger()
+
+
+def _extract_opponent(pgn: str, player_color: str) -> str:
+    if not pgn:
+        return "Blunder.Therapist"
+    opponent_color = "Black" if player_color == "white" else "White"
+    match = re.search(fr'\[{opponent_color}\s+"(.*?)"\]', pgn, re.IGNORECASE)
+    if match:
+        name = match.group(1)
+        if name != "?" and name.strip():
+            return name
+    return "Blunder.Therapist"
+
+
+def _get_platform(platform_game_id: str | None) -> str:
+    if not platform_game_id:
+        return "bot"
+    if platform_game_id.startswith("chesscom"):
+        return "chess.com"
+    if platform_game_id.startswith("lichess"):
+        return "lichess"
+    return "bot"
 
 
 def _report_out(report: TiltReport | None) -> TiltReportOut | None:
@@ -67,6 +90,8 @@ async def list_games(
                 result=g.result,
                 played_at=g.played_at,
                 tilt_report=_report_out(g.tilt_report),
+                opponent_name=_extract_opponent(g.pgn, g.player_color),
+                platform=_get_platform(g.platform_game_id),
             )
             for g in games
         ],
@@ -99,6 +124,8 @@ async def get_game(
         result=game.result,
         played_at=game.played_at,
         tilt_report=_report_out(game.tilt_report),
+        opponent_name=_extract_opponent(game.pgn, game.player_color),
+        platform=_get_platform(game.platform_game_id),
     )
 
 

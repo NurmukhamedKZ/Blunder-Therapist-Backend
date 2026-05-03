@@ -106,7 +106,7 @@ async def fetch_chesscom_games(
             cur = cur.replace(month=cur.month + 1)
 
     games: list[RawGame] = []
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         for year, month in months:
             url = f"https://api.chess.com/pub/player/{username}/games/{year}/{month:02d}"
             resp = await client.get(url)
@@ -171,7 +171,7 @@ async def fetch_lichess_games(
     }
     headers = {"Accept": "application/x-ndjson"}
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
         resp = await client.get(url, params=params, headers=headers)
         if resp.status_code == 404:
             raise ValueError(f"Username not found on lichess: {username}")
