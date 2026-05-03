@@ -70,6 +70,20 @@ async def observe(
     run_log = log.bind(thread_id=req.thread_id)
     run_log.info("observe_event", game_event=req.event)
 
+    if user.plan == "free":
+        # Check if this thread already has state (meaning it's an ongoing interaction)
+        has_state = await agent_service.has_state(req.thread_id)
+        if not has_state:
+            # New thread or game_start: check if the user has reached their game limit
+            count_res = await db.execute(
+                select(func.count(Game.id))
+                .where(Game.user_id == user.user_id, Game.platform_game_id == None)
+            )
+            count = count_res.scalar_one()
+            if count >= 2:
+                log.info("limit_reached", user_id=user.user_id, count=count, event=req.event)
+                raise HTTPException(status_code=403, detail="limit_reached")
+
     if req.event == "game_start":
         async def _empty():
             yield "event: done\ndata: {}\n\n"
@@ -146,6 +160,19 @@ async def message(
     ctx = AgentContext(user_id=user.user_id, jwt=jwt_token)
     run_log = log.bind(thread_id=req.thread_id)
     run_log.info("message_received", text_length=len(req.text))
+
+    if user.plan == "free":
+        # If thread has no state yet, it's a new interaction; check limit
+        if not await agent_service.has_state(req.thread_id):
+            count_res = await db.execute(
+                select(func.count(Game.id))
+                .where(Game.user_id == user.user_id, Game.platform_game_id == None)
+            )
+            count = count_res.scalar_one()
+            if count >= 2:
+                log.info("limit_reached_on_message", user_id=user.user_id, count=count)
+                raise HTTPException(status_code=403, detail="limit_reached")
+
     return StreamingResponse(
         agent_service.stream(req.thread_id, ctx, [HumanMessage(req.text)]),
         media_type="text/event-stream",

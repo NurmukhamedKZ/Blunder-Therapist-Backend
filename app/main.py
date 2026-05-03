@@ -11,7 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.logging_setup import setup_logging
 setup_logging()
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -113,6 +113,43 @@ log = structlog.get_logger()
 @app.get("/")
 def root():
     return {"status": "ok", "service": "blunder-therapist"}
+
+
+@app.get("/api/me")
+async def get_me(
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get current user's profile and game usage."""
+    count_res = await db.execute(
+        select(func.count(Game.id))
+        .where(Game.user_id == user.user_id, Game.platform_game_id == None)
+    )
+    count = count_res.scalar_one()
+    return {
+        "user_id": user.user_id,
+        "plan": user.plan,
+        "games_count": count,
+        "games_limit": 2 if user.plan == "free" else None,
+    }
+
+
+@app.post("/api/upgrade")
+async def upgrade_plan(
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Temporary endpoint to upgrade to pro plan."""
+    from app.models import Profile
+    result = await db.execute(select(Profile).where(Profile.user_id == user.user_id))
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile.plan = "pro"
+    await db.commit()
+    log.info("user_upgraded_to_pro", user_id=user.user_id)
+    return {"status": "ok", "plan": "pro"}
 
 
 @app.post("/api/analyze-game", response_model=TiltDetectorResponse)
