@@ -4,6 +4,7 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 # Install Stockfish and other necessary system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     stockfish \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory
