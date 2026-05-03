@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 class ObserveRequest(BaseModel):
     thread_id: str
-    event: Literal["game_start", "blunder", "game_end"]
+    event: Literal["game_start", "blunder", "game_end", "arrival"]
     payload: dict[str, Any] = {}
 
 

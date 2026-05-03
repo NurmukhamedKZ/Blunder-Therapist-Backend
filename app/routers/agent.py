@@ -128,7 +128,7 @@ async def observe(
     else:
         new_msgs = [HumanMessage(_format_observation_message(req.event, req.payload))]
     
-    StreamingResponse(
+    return StreamingResponse(
         agent_service.stream(req.thread_id, ctx, new_msgs),
         media_type="text/event-stream",
     )

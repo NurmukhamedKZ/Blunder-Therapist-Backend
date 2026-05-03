@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
     model_fast: str = "gpt-4o-mini"
-    model_smart: str = "gpt-4o"
+    model_smart: str = "gpt-5.4-nano"
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./dev.db"
